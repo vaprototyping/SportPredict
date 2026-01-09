@@ -4,7 +4,7 @@ import {
   HistoricalMatch, UpcomingMatch, PredictionResult, 
   TeamMapping, RunHistoryItem 
 } from './types';
-import { getTeamForm, parseCSVDate, findMissingTeams } from './services/dataProcessor';
+import { getTeamForm, parseCSVDate, findMissingTeams, suggestTeamMatches } from './services/dataProcessor';
 import { calculateOutcomeProbs, calculateAsianProbs } from './services/mathUtils';
 import { db } from './services/db';
 import { 
@@ -15,13 +15,14 @@ import {
 
 // Use standard JS/Browser APIs for CSV parsing
 const parseCSV = (csvText: string): any[] => {
-  const lines = csvText.split(/\r?\n/);
-  const headers = lines[0].split(',');
-  return lines.slice(1).filter(l => l.trim()).map(line => {
+  const lines = csvText.split(/\r?\n/).filter(line => line.trim().length > 0);
+  if (lines.length === 0) return [];
+  const headers = lines[0].split(',').map(header => header.trim());
+  return lines.slice(1).map(line => {
     const values = line.split(',');
     const obj: any = {};
     headers.forEach((h, i) => {
-      obj[h.trim()] = values[i]?.trim();
+      obj[h] = values[i]?.trim();
     });
     return obj;
   });
@@ -43,10 +44,38 @@ const App: React.FC = () => {
   const [results, setResults] = useState<PredictionResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isDbLoading, setIsDbLoading] = useState(true);
+  const [mappingSearch, setMappingSearch] = useState('');
+  const [upcomingErrors, setUpcomingErrors] = useState<string[]>([]);
+  const [upcomingWarnings, setUpcomingWarnings] = useState<string[]>([]);
+  const [maxPicks, setMaxPicks] = useState(5);
   
   // Settings
   const [evThreshold, setEvThreshold] = useState(0.05); // 5% EV
   const [probThreshold, setProbThreshold] = useState(0.5); // 50% Win Prob
+
+  const historicalTeams = useMemo(() => (
+    Array.from(new Set(historicalData.flatMap(m => [m.HomeTeam, m.AwayTeam])))
+  ), [historicalData]);
+
+  const historicalSummary = useMemo(() => {
+    if (historicalData.length === 0) {
+      return { teams: 0, dateRange: '—' };
+    }
+    const sortedDates = historicalData
+      .map(match => match.Date)
+      .filter(Boolean)
+      .sort();
+    const start = sortedDates[0];
+    const end = sortedDates[sortedDates.length - 1];
+    return {
+      teams: historicalTeams.length,
+      dateRange: `${start} → ${end}`
+    };
+  }, [historicalData, historicalTeams.length]);
+
+  const upcomingTeams = useMemo(() => (
+    Array.from(new Set(upcomingData.flatMap(m => [m.HomeTeam, m.AwayTeam])))
+  ), [upcomingData]);
 
   // --- Effects ---
   // Load Historical Data from IndexedDB on Mount
@@ -111,22 +140,49 @@ const App: React.FC = () => {
     const file = e.target.files[0];
     const text = await file.text();
     const parsed = parseCSV(text);
-    // Fixed: Explicitly type the result of the map/filter chain to solve potential unknown[] inference on line 128
-    const matches: UpcomingMatch[] = parsed.map((m: any) => ({
-      Date: String(m.Date || ''),
-      League: String(m.League || ''),
-      HomeTeam: String(m.HomeTeam || ''),
-      AwayTeam: String(m.AwayTeam || ''),
-      AHh: parseFloat(m.AHh) || 0,
-      Odds_H: parseFloat(m.Odds_H) || 0,
-      Odds_A: parseFloat(m.Odds_A) || 0
-    })).filter((m: any) => m.HomeTeam && !isNaN(m.Odds_H)) as UpcomingMatch[];
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    const requiredHeaders = ['Date', 'League', 'HomeTeam', 'AwayTeam', 'AHh', 'Odds_H', 'Odds_A'];
+    if (parsed.length === 0) {
+      errors.push('No rows detected. Confirm the CSV has a header row and data.');
+    } else {
+      const headers = Object.keys(parsed[0]);
+      const missingHeaders = requiredHeaders.filter(header => !headers.includes(header));
+      if (missingHeaders.length > 0) {
+        errors.push(`Missing required columns: ${missingHeaders.join(', ')}`);
+      }
+    }
+
+    const matches: UpcomingMatch[] = parsed.map((m: any, index: number) => {
+      const ahh = parseFloat(m.AHh);
+      const oddsH = parseFloat(m.Odds_H);
+      const oddsA = parseFloat(m.Odds_A);
+      if (Number.isNaN(ahh) || ![0, 0.5].includes(ahh)) {
+        warnings.push(`Row ${index + 2}: AHh must be 0.0 or 0.5. Skipped.`);
+        return null;
+      }
+      if (Number.isNaN(oddsH) || Number.isNaN(oddsA)) {
+        warnings.push(`Row ${index + 2}: Missing odds. Skipped.`);
+        return null;
+      }
+      return {
+        Date: String(m.Date || ''),
+        League: String(m.League || ''),
+        HomeTeam: String(m.HomeTeam || ''),
+        AwayTeam: String(m.AwayTeam || ''),
+        AHh: ahh,
+        Odds_H: oddsH,
+        Odds_A: oddsA
+      };
+    }).filter(Boolean) as UpcomingMatch[];
+    
+    setUpcomingErrors(errors);
+    setUpcomingWarnings(warnings);
     
     setUpcomingData(matches);
     
     // Check for missing mappings
     const histTeams = Array.from(new Set(historicalData.map(m => m.HomeTeam))) as string[];
-    // Fixed: Explicitly type the arrays passed to findMissingTeams to avoid unknown[] assignment errors
     const upcomingTeams: string[] = [
       ...matches.map(m => m.HomeTeam), 
       ...matches.map(m => m.AwayTeam)
@@ -222,7 +278,7 @@ const App: React.FC = () => {
 
       const topPicks = allPicks
         .sort((a, b) => b.ev - a.ev)
-        .slice(0, 5);
+        .slice(0, maxPicks);
 
       setResults(topPicks);
       
@@ -256,6 +312,23 @@ const App: React.FC = () => {
       await db.clearAll();
       setHistoricalData([]);
     }
+  };
+
+  const downloadUpcomingTemplate = () => {
+    const template = [
+      'Date,League,HomeTeam,AwayTeam,AHh,Odds_H,Odds_A',
+      '2026-01-17,EPL,Manchester United,Manchester City,0.5,1.825,2.025',
+      '2026-01-18,EPL,Sunderland,Crystal Palace,0.0,1.950,1.900'
+    ].join('\n');
+    const blob = new Blob([template], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'upcoming_events_template.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   // --- Sub-components ---
@@ -306,7 +379,7 @@ const App: React.FC = () => {
         <header className="mb-8 flex justify-between items-center">
           <div>
             <h2 className="text-2xl font-bold text-slate-900 capitalize">{activeTab}</h2>
-            <p className="text-slate-500">Professional football value detection engine.</p>
+            <p className="text-slate-500">Football value detection engine for serious testing (no guarantees).</p>
           </div>
           <div className="flex space-x-3">
              {historicalData.length > 0 && upcomingData.length > 0 && (
@@ -371,13 +444,31 @@ const App: React.FC = () => {
                   {isDbLoading ? '...' : historicalData.length.toLocaleString()}
                 </span>
               </div>
+              <div className="mt-4 grid grid-cols-2 gap-3 text-xs text-slate-500">
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-3">
+                  <span className="uppercase text-[10px] font-bold text-slate-400">Teams</span>
+                  <div className="text-sm font-semibold text-slate-700 mt-1">{historicalSummary.teams}</div>
+                </div>
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-3">
+                  <span className="uppercase text-[10px] font-bold text-slate-400">Date Span</span>
+                  <div className="text-xs font-semibold text-slate-700 mt-1">{historicalSummary.dateRange}</div>
+                </div>
+              </div>
             </div>
 
             <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
-              <h3 className="text-lg font-bold flex items-center space-x-2 mb-6">
-                <Table size={20} className="text-indigo-600" />
-                <span>Weekly Odds Input</span>
-              </h3>
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-lg font-bold flex items-center space-x-2">
+                  <Table size={20} className="text-indigo-600" />
+                  <span>Weekly Odds Input</span>
+                </h3>
+                <button
+                  onClick={downloadUpcomingTemplate}
+                  className="text-xs font-bold uppercase tracking-wider text-indigo-600 border border-indigo-200 px-3 py-1 rounded-lg hover:bg-indigo-50 transition-colors"
+                >
+                  Download Template
+                </button>
+              </div>
               <div className="border-2 border-dashed border-slate-200 rounded-xl p-10 flex flex-col items-center justify-center bg-slate-50 hover:bg-slate-100 transition-colors group">
                 <Upload size={40} className="text-slate-400 mb-4 group-hover:text-indigo-500 transition-colors" />
                 <p className="text-sm text-slate-600 mb-2 font-medium">Upload upcoming_events.csv</p>
@@ -396,6 +487,29 @@ const App: React.FC = () => {
                 <span className="text-slate-500">Session Matches:</span>
                 <span className="font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">{upcomingData.length}</span>
               </div>
+              {upcomingErrors.length > 0 && (
+                <div className="mt-4 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg p-3 space-y-1">
+                  {upcomingErrors.map((error, idx) => (
+                    <div key={idx} className="flex items-start space-x-2">
+                      <AlertTriangle size={14} className="mt-0.5" />
+                      <span>{error}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {upcomingWarnings.length > 0 && (
+                <div className="mt-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-lg p-3 space-y-1">
+                  {upcomingWarnings.slice(0, 4).map((warning, idx) => (
+                    <div key={idx} className="flex items-start space-x-2">
+                      <Info size={14} className="mt-0.5" />
+                      <span>{warning}</span>
+                    </div>
+                  ))}
+                  {upcomingWarnings.length > 4 && (
+                    <div className="text-[10px] font-bold uppercase text-amber-700">+ {upcomingWarnings.length - 4} more warnings</div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="col-span-full bg-amber-50 border border-amber-200 p-6 rounded-2xl flex items-start space-x-4 shadow-sm">
@@ -408,6 +522,16 @@ const App: React.FC = () => {
                 </p>
               </div>
             </div>
+            <div className="col-span-full bg-white border border-slate-200 p-6 rounded-2xl flex items-start space-x-4 shadow-sm">
+              <Info className="text-slate-400 mt-1 shrink-0" />
+              <div>
+                <h4 className="font-bold text-slate-900 mb-1">Responsible Use Reminder</h4>
+                <p className="text-sm text-slate-600 leading-relaxed">
+                  This tool is for analytical testing and value detection only. Outcomes are uncertain, 
+                  past performance is not predictive, and there are no guaranteed returns.
+                </p>
+              </div>
+            </div>
           </div>
         )}
 
@@ -416,7 +540,13 @@ const App: React.FC = () => {
             <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
               <div className="relative w-72">
                  <Search className="absolute left-3 top-2.5 text-slate-400" size={16} />
-                 <input type="text" placeholder="Search teams..." className="w-full bg-white border border-slate-200 rounded-lg py-2 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                 <input
+                   type="text"
+                   value={mappingSearch}
+                   onChange={(e) => setMappingSearch(e.target.value)}
+                   placeholder="Search teams..."
+                   className="w-full bg-white border border-slate-200 rounded-lg py-2 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                 />
               </div>
               <p className="text-xs text-slate-500 uppercase font-bold tracking-widest">Team Name Reconciliation</p>
             </div>
@@ -431,26 +561,49 @@ const App: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {upcomingData.map((m, idx) => (
-                    [m.HomeTeam, m.AwayTeam].map((team, tIdx) => (
-                      <tr key={`${idx}-${tIdx}`} className="hover:bg-slate-50 transition-colors">
-                        <td className="px-6 py-4 font-semibold text-slate-700">{team}</td>
-                        <td className="px-6 py-4 text-center">
-                          <ChevronRight size={16} className="mx-auto text-slate-300" />
-                        </td>
-                        <td className="px-6 py-4">
-                          <input 
-                            type="text"
-                            value={teamMappings[team] || ''}
-                            onChange={(e) => setTeamMappings({...teamMappings, [team]: e.target.value})}
-                            placeholder="Enter historical team name..."
-                            className="w-full bg-slate-50 border border-slate-200 rounded px-3 py-1.5 focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-all"
-                          />
-                        </td>
-                      </tr>
-                    ))
-                  )).flat().filter((v, i, a) => a.findIndex(t => t.key === v.key) === i)}
+                    [m.HomeTeam, m.AwayTeam].map((team, tIdx) => {
+                      if (mappingSearch && !team.toLowerCase().includes(mappingSearch.toLowerCase())) {
+                        return null;
+                      }
+                      const suggestions = suggestTeamMatches(team, historicalTeams);
+                      return (
+                        <tr key={`${idx}-${tIdx}`} className="hover:bg-slate-50 transition-colors">
+                          <td className="px-6 py-4 font-semibold text-slate-700">{team}</td>
+                          <td className="px-6 py-4 text-center">
+                            <ChevronRight size={16} className="mx-auto text-slate-300" />
+                          </td>
+                          <td className="px-6 py-4 space-y-2">
+                            <input 
+                              type="text"
+                              value={teamMappings[team] || ''}
+                              onChange={(e) => setTeamMappings({...teamMappings, [team]: e.target.value})}
+                              placeholder="Enter historical team name..."
+                              className="w-full bg-slate-50 border border-slate-200 rounded px-3 py-1.5 focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-all"
+                            />
+                            {suggestions.length > 0 && (
+                              <div className="flex flex-wrap gap-2">
+                                {suggestions.map(suggestion => (
+                                  <button
+                                    key={suggestion}
+                                    onClick={() => setTeamMappings({...teamMappings, [team]: suggestion})}
+                                    className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 border border-indigo-200 px-2 py-1 rounded-lg hover:bg-indigo-50 transition-colors"
+                                  >
+                                    {suggestion}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )).flat().filter(Boolean).filter((v, i, a) => a.findIndex(t => t.key === v.key) === i)}
                 </tbody>
               </table>
+            </div>
+            <div className="p-4 bg-slate-50 border-t border-slate-100 text-xs text-slate-500 flex items-center justify-between">
+              <span>Unmapped teams: {findMissingTeams(upcomingTeams, historicalTeams, teamMappings).length}</span>
+              <span>Mappings stored locally for future uploads.</span>
             </div>
           </div>
         )}
@@ -482,7 +635,30 @@ const App: React.FC = () => {
               </div>
               <div className="bg-indigo-600 p-6 rounded-2xl shadow-lg flex flex-col justify-center">
                 <span className="text-white/80 text-sm font-medium">Selected Picks (A Mode)</span>
-                <span className="text-3xl font-bold text-white mt-1">{results.length} / 5</span>
+                <span className="text-3xl font-bold text-white mt-1">{results.length} / {maxPicks}</span>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                <span className="text-slate-500 text-sm font-medium">Max Picks (A Mode)</span>
+                <div className="mt-2 flex items-center space-x-4">
+                  <input 
+                    type="range" min="3" max="5" step="1" value={maxPicks} 
+                    onChange={(e) => setMaxPicks(parseFloat(e.target.value))}
+                    className="flex-1 h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                  />
+                  <span className="font-bold text-indigo-600 w-12 text-right">{maxPicks}</span>
+                </div>
+              </div>
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                <span className="text-slate-500 text-sm font-medium">Matches Evaluated</span>
+                <div className="mt-2 text-2xl font-bold text-slate-800">{upcomingData.length}</div>
+              </div>
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                <span className="text-slate-500 text-sm font-medium">Team Mapping Gaps</span>
+                <div className="mt-2 text-2xl font-bold text-slate-800">
+                  {findMissingTeams(upcomingTeams, historicalTeams, teamMappings).length}
+                </div>
               </div>
             </div>
 
@@ -504,6 +680,7 @@ const App: React.FC = () => {
                         <th className="px-6 py-4 text-left">Date / League</th>
                         <th className="px-6 py-4 text-left">Matchup</th>
                         <th className="px-6 py-4 text-left">Market Pick</th>
+                        <th className="px-6 py-4 text-right">Handicap</th>
                         <th className="px-6 py-4 text-right">Odds</th>
                         <th className="px-6 py-4 text-right">Model Prob</th>
                         <th className="px-6 py-4 text-right">EV</th>
@@ -513,7 +690,7 @@ const App: React.FC = () => {
                     <tbody className="divide-y divide-slate-100">
                       {results.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="px-6 py-12 text-center text-slate-400">
+                          <td colSpan={8} className="px-6 py-12 text-center text-slate-400">
                              No picks found matching current thresholds. Adjust sliders or upload more data.
                           </td>
                         </tr>
@@ -528,6 +705,7 @@ const App: React.FC = () => {
                              <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-xs font-bold mr-2">{r.marketType}</span>
                              <span className="text-indigo-600 font-bold">{r.pickSide}</span>
                           </td>
+                          <td className="px-6 py-4 text-right font-mono text-slate-600">{r.handicap.toFixed(1)}</td>
                           <td className="px-6 py-4 text-right font-mono font-bold text-slate-900">{r.odds.toFixed(3)}</td>
                           <td className="px-6 py-4 text-right text-slate-600">{(r.modelProb * 100).toFixed(1)}%</td>
                           <td className="px-6 py-4 text-right">
@@ -577,17 +755,17 @@ const App: React.FC = () => {
                 </div>
                 <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {item.picks.map((p, i) => (
-                    <div key={i} className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                      <div className="flex justify-between items-start mb-2">
-                        <span className="text-[10px] uppercase font-bold text-slate-400">{p.league}</span>
-                        <span className="text-xs font-bold text-emerald-600">EV +{(p.ev * 100).toFixed(0)}%</span>
-                      </div>
-                      <p className="text-sm font-bold text-slate-800 truncate mb-1">{p.match}</p>
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs font-bold text-indigo-600">{p.marketType} {p.pickSide}</span>
+                      <div key={i} className="p-3 bg-slate-50 rounded-xl border border-slate-100">
+                        <div className="flex justify-between items-start mb-2">
+                          <span className="text-[10px] uppercase font-bold text-slate-400">{p.league}</span>
+                          <span className="text-xs font-bold text-emerald-600">EV +{(p.ev * 100).toFixed(0)}%</span>
+                        </div>
+                        <p className="text-sm font-bold text-slate-800 truncate mb-1">{p.match}</p>
+                        <div className="flex justify-between items-center">
+                        <span className="text-xs font-bold text-indigo-600">{p.marketType} {p.pickSide} {p.handicap.toFixed(1)}</span>
                         <span className="text-xs font-mono font-bold text-slate-500">@{p.odds.toFixed(2)}</span>
+                        </div>
                       </div>
-                    </div>
                   ))}
                 </div>
               </div>

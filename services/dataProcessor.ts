@@ -46,3 +46,40 @@ export function findMissingTeams(upcomingTeams: string[], historicalTeams: strin
   const allHistorical = new Set(historicalTeams);
   return upcomingTeams.filter(team => !allHistorical.has(team) && !mappings[team]);
 }
+
+function normalizeTeamName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/fc|cf|afc|ac/g, '')
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function suggestTeamMatches(
+  teamName: string,
+  historicalTeams: string[],
+  limit: number = 4
+): string[] {
+  const normalizedTarget = normalizeTeamName(teamName);
+  if (!normalizedTarget) return [];
+  const targetTokens = new Set(normalizedTarget.split(' ').filter(Boolean));
+
+  const scored = historicalTeams.map(candidate => {
+    const normalizedCandidate = normalizeTeamName(candidate);
+    const candidateTokens = new Set(normalizedCandidate.split(' ').filter(Boolean));
+    let overlap = 0;
+    targetTokens.forEach(token => {
+      if (candidateTokens.has(token)) overlap += 1;
+    });
+    const containsBonus = normalizedCandidate.includes(normalizedTarget) || normalizedTarget.includes(normalizedCandidate) ? 2 : 0;
+    const score = overlap + containsBonus;
+    return { candidate, score };
+  });
+
+  return scored
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(item => item.candidate);
+}
