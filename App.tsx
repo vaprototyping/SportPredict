@@ -28,16 +28,33 @@ const parseCSV = (csvText: string): any[] => {
   });
 };
 
+const safeLocalStorageGet = (key: string, fallback: string) => {
+  try {
+    return localStorage.getItem(key) ?? fallback;
+  } catch (error) {
+    console.warn(`Unable to access localStorage for ${key}.`, error);
+    return fallback;
+  }
+};
+
+const safeLocalStorageSet = (key: string, value: string) => {
+  try {
+    localStorage.setItem(key, value);
+  } catch (error) {
+    console.warn(`Unable to persist ${key} to localStorage.`, error);
+  }
+};
+
 const App: React.FC = () => {
   // --- State ---
   const [historicalData, setHistoricalData] = useState<HistoricalMatch[]>([]);
   const [upcomingData, setUpcomingData] = useState<UpcomingMatch[]>([]);
   const [teamMappings, setTeamMappings] = useState<TeamMapping>(() => {
-    const saved = localStorage.getItem('teamMappings');
+    const saved = safeLocalStorageGet('teamMappings', '');
     return saved ? JSON.parse(saved) : {};
   });
   const [runHistory, setRunHistory] = useState<RunHistoryItem[]>(() => {
-    const saved = localStorage.getItem('runHistory');
+    const saved = safeLocalStorageGet('runHistory', '');
     return saved ? JSON.parse(saved) : [];
   });
   const [activeTab, setActiveTab] = useState<'upload' | 'mapping' | 'analysis' | 'history'>('upload');
@@ -95,11 +112,11 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('teamMappings', JSON.stringify(teamMappings));
+    safeLocalStorageSet('teamMappings', JSON.stringify(teamMappings));
   }, [teamMappings]);
 
   useEffect(() => {
-    localStorage.setItem('runHistory', JSON.stringify(runHistory));
+    safeLocalStorageSet('runHistory', JSON.stringify(runHistory));
   }, [runHistory]);
 
   // --- Logic ---
