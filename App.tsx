@@ -325,7 +325,7 @@ const App: React.FC = () => {
   };
 
   const clearHistorical = async () => {
-    if(confirm("Permanently delete ALL historical data from this browser?")) {
+    if (confirm("Are you sure you want to permanently delete ALL historical data from this browser? This cannot be undone.")) {
       await db.clearAll();
       setHistoricalData([]);
     }
@@ -424,8 +424,13 @@ const App: React.FC = () => {
                   <span className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter">Persistent Storage</span>
                 </div>
                 {historicalData.length > 0 && (
-                   <button onClick={clearHistorical} className="text-red-500 hover:text-red-700 transition-colors bg-red-50 p-2 rounded-lg" title="Clear All Persistent Data">
-                     <Trash2 size={18} />
+                   <button
+                     onClick={clearHistorical}
+                     className="text-red-600 hover:text-red-700 transition-colors bg-red-50 px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wider flex items-center space-x-2"
+                     title="Clear All Persistent Data"
+                   >
+                     <AlertTriangle size={14} />
+                     <span>Delete All</span>
                    </button>
                 )}
               </div>
