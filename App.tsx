@@ -64,11 +64,14 @@ const App: React.FC = () => {
   const [mappingSearch, setMappingSearch] = useState('');
   const [upcomingErrors, setUpcomingErrors] = useState<string[]>([]);
   const [upcomingWarnings, setUpcomingWarnings] = useState<string[]>([]);
-  const [maxPicks, setMaxPicks] = useState(5);
+  const suggestedEvThreshold = 0.05;
+  const suggestedProbThreshold = 0.5;
+  const suggestedMaxPicks = 5;
+  const [maxPicks, setMaxPicks] = useState(suggestedMaxPicks);
   
   // Settings
-  const [evThreshold, setEvThreshold] = useState(0.05); // 5% EV
-  const [probThreshold, setProbThreshold] = useState(0.5); // 50% Win Prob
+  const [evThreshold, setEvThreshold] = useState(suggestedEvThreshold); // 5% EV
+  const [probThreshold, setProbThreshold] = useState(suggestedProbThreshold); // 50% Win Prob
 
   const historicalTeams = useMemo(() => (
     Array.from(new Set(historicalData.flatMap(m => [m.HomeTeam, m.AwayTeam])))
@@ -629,7 +632,12 @@ const App: React.FC = () => {
           <div className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <span className="text-slate-500 text-sm font-medium">EV Filter Threshold</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 text-sm font-medium">EV Filter Threshold</span>
+                  <span className="text-xs font-semibold text-indigo-500">
+                    Suggested: {(suggestedEvThreshold * 100).toFixed(0)}%
+                  </span>
+                </div>
                 <div className="mt-2 flex items-center space-x-4">
                   <input 
                     type="range" min="0" max="0.3" step="0.01" value={evThreshold} 
@@ -640,7 +648,12 @@ const App: React.FC = () => {
                 </div>
               </div>
               <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <span className="text-slate-500 text-sm font-medium">Min Probability Threshold</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 text-sm font-medium">Min Probability Threshold</span>
+                  <span className="text-xs font-semibold text-indigo-500">
+                    Suggested: {(suggestedProbThreshold * 100).toFixed(0)}%
+                  </span>
+                </div>
                 <div className="mt-2 flex items-center space-x-4">
                   <input 
                     type="range" min="0.3" max="0.8" step="0.01" value={probThreshold} 
@@ -657,7 +670,12 @@ const App: React.FC = () => {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <span className="text-slate-500 text-sm font-medium">Max Picks (A Mode)</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 text-sm font-medium">Max Picks (A Mode)</span>
+                  <span className="text-xs font-semibold text-indigo-500">
+                    Suggested: {suggestedMaxPicks}
+                  </span>
+                </div>
                 <div className="mt-2 flex items-center space-x-4">
                   <input 
                     type="range" min="3" max="5" step="1" value={maxPicks} 
