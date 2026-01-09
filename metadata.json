@@ -1,0 +1,5 @@
+{
+  "name": "FootyValue Pro - Football Analytics Engine",
+  "description": "A professional-grade football analytics dashboard that implements the 'A+1' model for Asian Handicap value detection using Poisson distributions and rolling form analysis.",
+  "requestFramePermissions": []
+}
