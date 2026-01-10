@@ -5,6 +5,7 @@ import {
   TeamMapping, RunHistoryItem 
 } from './types';
 import { getTeamForm, parseCSVDate, findMissingTeams, suggestTeamMatches } from './services/dataProcessor';
+import { mergeTeamMappings } from './services/teamMappings';
 import { calculateOutcomeProbs, calculateAsianProbs } from './services/mathUtils';
 import { db } from './services/db';
 import { 
@@ -51,7 +52,8 @@ const App: React.FC = () => {
   const [upcomingData, setUpcomingData] = useState<UpcomingMatch[]>([]);
   const [teamMappings, setTeamMappings] = useState<TeamMapping>(() => {
     const saved = safeLocalStorageGet('teamMappings', '');
-    return saved ? JSON.parse(saved) : {};
+    const parsed = saved ? JSON.parse(saved) : {};
+    return mergeTeamMappings(parsed);
   });
   const [runHistory, setRunHistory] = useState<RunHistoryItem[]>(() => {
     const saved = safeLocalStorageGet('runHistory', '');
@@ -97,6 +99,11 @@ const App: React.FC = () => {
     Array.from(new Set(upcomingData.flatMap(m => [m.HomeTeam, m.AwayTeam])))
   ), [upcomingData]);
 
+  const mergedTeamMappings = useMemo(
+    () => mergeTeamMappings(teamMappings),
+    [teamMappings]
+  );
+
   // --- Effects ---
   // Load Historical Data from IndexedDB on Mount
   useEffect(() => {
@@ -115,8 +122,8 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    safeLocalStorageSet('teamMappings', JSON.stringify(teamMappings));
-  }, [teamMappings]);
+    safeLocalStorageSet('teamMappings', JSON.stringify(mergedTeamMappings));
+  }, [mergedTeamMappings]);
 
   useEffect(() => {
     safeLocalStorageSet('runHistory', JSON.stringify(runHistory));
@@ -210,7 +217,7 @@ const App: React.FC = () => {
     const missing = findMissingTeams(
       upcomingTeams,
       histTeams,
-      teamMappings
+      mergedTeamMappings
     );
     if (missing.length > 0) setActiveTab('mapping');
   };
@@ -221,8 +228,8 @@ const App: React.FC = () => {
       const allPicks: PredictionResult[] = [];
 
       upcomingData.forEach(match => {
-        const hName = teamMappings[match.HomeTeam] || match.HomeTeam;
-        const aName = teamMappings[match.AwayTeam] || match.AwayTeam;
+        const hName = mergedTeamMappings[match.HomeTeam] || match.HomeTeam;
+        const aName = mergedTeamMappings[match.AwayTeam] || match.AwayTeam;
 
         const homeStats = getTeamForm(historicalData, hName);
         const awayStats = getTeamForm(historicalData, aName);
@@ -600,7 +607,7 @@ const App: React.FC = () => {
                           <td className="px-6 py-4 space-y-2">
                             <input 
                               type="text"
-                              value={teamMappings[team] || ''}
+                              value={mergedTeamMappings[team] || ''}
                               onChange={(e) => setTeamMappings({...teamMappings, [team]: e.target.value})}
                               placeholder="Enter historical team name..."
                               className="w-full bg-slate-50 border border-slate-200 rounded px-3 py-1.5 focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-all"
@@ -627,7 +634,7 @@ const App: React.FC = () => {
               </table>
             </div>
             <div className="p-4 bg-slate-50 border-t border-slate-100 text-xs text-slate-500 flex items-center justify-between">
-              <span>Unmapped teams: {findMissingTeams(upcomingTeams, historicalTeams, teamMappings).length}</span>
+              <span>Unmapped teams: {findMissingTeams(upcomingTeams, historicalTeams, mergedTeamMappings).length}</span>
               <span>Mappings stored locally for future uploads.</span>
             </div>
           </div>
@@ -697,7 +704,7 @@ const App: React.FC = () => {
               <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
                 <span className="text-slate-500 text-sm font-medium">Team Mapping Gaps</span>
                 <div className="mt-2 text-2xl font-bold text-slate-800">
-                  {findMissingTeams(upcomingTeams, historicalTeams, teamMappings).length}
+                  {findMissingTeams(upcomingTeams, historicalTeams, mergedTeamMappings).length}
                 </div>
               </div>
             </div>
