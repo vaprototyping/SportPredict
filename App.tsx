@@ -21,12 +21,14 @@ const parseCSV = (csvText: string): any[] => {
   const headers = lines[0].split(',').map(header => header.trim());
   return lines.slice(1).map(line => {
     const values = line.split(',');
+    const hasData = values.some(value => value?.trim().length);
+    if (!hasData) return null;
     const obj: any = {};
     headers.forEach((h, i) => {
       obj[h] = values[i]?.trim();
     });
     return obj;
-  });
+  }).filter(Boolean);
 };
 
 const safeLocalStorageGet = (key: string, fallback: string) => {
